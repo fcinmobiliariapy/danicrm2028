@@ -1,10 +1,7 @@
-import cookieParser from 'cookie-parser';
-import express from 'express';
-import fs from 'fs';
-import path from 'path';
-import { initSchema } from './src/server/db';
-import { registerApiRoutes } from './src/server/routes';
-import { seedDatabase } from './src/server/seed';
+import { initSchema } from './src/server/db.js';
+import { registerApiRoutes } from './src/server/routes.js';
+import { seedDatabase } from './src/server/seed.js';
+
 
 const app = express();
 
