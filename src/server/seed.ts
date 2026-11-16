@@ -1,5 +1,5 @@
 import { hashPassword } from './auth.ts';
-import { db } from './db.ts';
+import { db } from './db.js';
 
 const PARAGUAY_DEPARTMENTS = [
   { code: '00', name: 'Capital' },
