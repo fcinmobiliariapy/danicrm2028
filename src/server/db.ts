@@ -6,8 +6,8 @@ export const db = createClient({
 });
 
 export async function initSchema() {
-  // En Turso se usa db.batch() para ejecutar múltiples tablas de una sola vez
   await db.batch([
+    `PRAGMA foreign_keys = ON`,
     `CREATE TABLE IF NOT EXISTS roles (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       slug TEXT NOT NULL UNIQUE,
@@ -41,7 +41,172 @@ export async function initSchema() {
       last_login_at TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       FOREIGN KEY (role_id) REFERENCES roles(id)
+    )`,
+    `CREATE TABLE IF NOT EXISTS departments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      code TEXT NOT NULL,
+      name TEXT NOT NULL UNIQUE,
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+    `CREATE TABLE IF NOT EXISTS districts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      department_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE (department_id, name),
+      FOREIGN KEY (department_id) REFERENCES departments(id) ON DELETE CASCADE
+    )`,
+    `CREATE TABLE IF NOT EXISTS seccionales (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      department_id INTEGER NOT NULL,
+      district_id INTEGER NOT NULL,
+      number INTEGER NOT NULL,
+      name TEXT DEFAULT '',
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE (department_id, district_id, number),
+      FOREIGN KEY (department_id) REFERENCES departments(id) ON DELETE CASCADE,
+      FOREIGN KEY (district_id) REFERENCES districts(id) ON DELETE CASCADE
+    )`,
+    `CREATE TABLE IF NOT EXISTS coordinators (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      first_name TEXT NOT NULL,
+      last_name TEXT NOT NULL,
+      ci TEXT NOT NULL UNIQUE,
+      department_id INTEGER NOT NULL,
+      district_id INTEGER NOT NULL,
+      seccional_number INTEGER NOT NULL,
+      phone TEXT NOT NULL,
+      registered_at TEXT NOT NULL,
+      notes TEXT DEFAULT '',
+      consent_accepted INTEGER NOT NULL DEFAULT 1,
+      custom_fields_json TEXT DEFAULT '{}',
+      created_by INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (department_id) REFERENCES departments(id),
+      FOREIGN KEY (district_id) REFERENCES districts(id)
+    )`,
+    `CREATE TABLE IF NOT EXISTS youth_members (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      first_name TEXT NOT NULL,
+      last_name TEXT NOT NULL,
+      ci TEXT NOT NULL UNIQUE,
+      department_id INTEGER NOT NULL,
+      district_id INTEGER NOT NULL,
+      seccional_number INTEGER NOT NULL,
+      phone TEXT NOT NULL,
+      registered_at TEXT NOT NULL,
+      notes TEXT DEFAULT '',
+      consent_accepted INTEGER NOT NULL DEFAULT 1,
+      custom_fields_json TEXT DEFAULT '{}',
+      created_by INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (department_id) REFERENCES departments(id),
+      FOREIGN KEY (district_id) REFERENCES districts(id)
+    )`,
+    `CREATE TABLE IF NOT EXISTS women_members (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      first_name TEXT NOT NULL,
+      last_name TEXT NOT NULL,
+      ci TEXT NOT NULL UNIQUE,
+      department_id INTEGER NOT NULL,
+      district_id INTEGER NOT NULL,
+      seccional_number INTEGER NOT NULL,
+      phone TEXT NOT NULL,
+      registered_at TEXT NOT NULL,
+      notes TEXT DEFAULT '',
+      consent_accepted INTEGER NOT NULL DEFAULT 1,
+      custom_fields_json TEXT DEFAULT '{}',
+      created_by INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (department_id) REFERENCES departments(id),
+      FOREIGN KEY (district_id) REFERENCES districts(id)
+    )`,
+    `CREATE TABLE IF NOT EXISTS onp_members (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      full_name TEXT NOT NULL,
+      phone TEXT NOT NULL,
+      organization TEXT NOT NULL,
+      registered_at TEXT NOT NULL DEFAULT (date('now')),
+      notes TEXT DEFAULT '',
+      custom_fields_json TEXT DEFAULT '{}',
+      created_by INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+    `CREATE TABLE IF NOT EXISTS vote_projections (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      coordinator_id INTEGER NOT NULL,
+      department_id INTEGER NOT NULL,
+      district_id INTEGER NOT NULL,
+      seccional_number INTEGER NOT NULL,
+      estimated_votes INTEGER NOT NULL DEFAULT 0,
+      responsible_name TEXT NOT NULL,
+      responsible_user_id INTEGER,
+      notes TEXT DEFAULT '',
+      custom_fields_json TEXT DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE (coordinator_id, responsible_name),
+      FOREIGN KEY (coordinator_id) REFERENCES coordinators(id) ON DELETE CASCADE,
+      FOREIGN KEY (department_id) REFERENCES departments(id),
+      FOREIGN KEY (district_id) REFERENCES districts(id)
+    )`,
+    `CREATE TABLE IF NOT EXISTS agenda_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      event_date TEXT NOT NULL,
+      start_time TEXT NOT NULL,
+      end_time TEXT NOT NULL,
+      department_id INTEGER,
+      district_id INTEGER,
+      seccional_number INTEGER,
+      location TEXT DEFAULT '',
+      responsible TEXT DEFAULT '',
+      participants TEXT DEFAULT '',
+      description TEXT DEFAULT '',
+      notes TEXT DEFAULT '',
+      reminder_minutes INTEGER NOT NULL DEFAULT 60,
+      status TEXT NOT NULL DEFAULT 'programado',
+      custom_fields_json TEXT DEFAULT '{}',
+      created_by INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (department_id) REFERENCES departments(id),
+      FOREIGN KEY (district_id) REFERENCES districts(id)
+    )`,
+    `CREATE TABLE IF NOT EXISTS activities (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      event_id INTEGER NOT NULL,
+      summary TEXT NOT NULL DEFAULT '',
+      attendance_count INTEGER NOT NULL DEFAULT 0,
+      outcomes TEXT NOT NULL DEFAULT '',
+      logged_by TEXT NOT NULL DEFAULT '',
+      logged_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (event_id) REFERENCES agenda_events(id) ON DELETE CASCADE
+    )`,
+    `CREATE TABLE IF NOT EXISTS saved_reports (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      report_type TEXT NOT NULL,
+      filters_json TEXT NOT NULL DEFAULT '{}',
+      columns_json TEXT NOT NULL DEFAULT '[]',
+      generated_by TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+    `CREATE TABLE IF NOT EXISTS system_settings (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      platform_name TEXT NOT NULL DEFAULT 'CRM Político – Gestión Territorial',
+      organization_name TEXT NOT NULL DEFAULT '',
+      logo_url TEXT DEFAULT '',
+      primary_color TEXT DEFAULT '#1e40af',
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     )`
-    // Aquí agregaremos el resto de tus tablas (departments, districts, coordinators, etc.)
   ], 'write');
 }
