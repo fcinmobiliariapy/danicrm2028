@@ -1,0 +1,138 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-display: "Plus Jakarta Sans", system-ui, sans-serif;
+  --font-sans: "Public Sans", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+
+:root {
+  --brand-primary: #1E3A8A;
+  --brand-secondary: #B91C1C;
+  --app-bg: #F8FAFC;
+  --app-surface: #FFFFFF;
+  --app-text: #0F172A;
+  --app-border: #E2E8F0;
+  --app-font: "Public Sans", system-ui, sans-serif;
+  --app-display-font: "Plus Jakarta Sans", system-ui, sans-serif;
+  --app-radius: 12px;
+}
+
+body {
+  font-family: var(--app-font);
+  background-color: var(--app-bg);
+  color: var(--app-text);
+}
+
+h1, h2, h3, h4, .font-display {
+  font-family: var(--app-display-font);
+}
+
+/* Theme-aware surface, text, border, and radius integration */
+.theme-canvas {
+  background-color: var(--app-bg);
+  color: var(--app-text);
+}
+
+.theme-surface {
+  background-color: var(--app-surface);
+  border-color: var(--app-border);
+  border-radius: var(--app-radius);
+}
+
+.theme-canvas .bg-white {
+  background-color: var(--app-surface);
+}
+
+.theme-canvas .rounded-xl {
+  border-radius: var(--app-radius);
+}
+
+.theme-canvas h1,
+.theme-canvas h2,
+.theme-canvas h3,
+.theme-canvas .text-slate-900 {
+  color: var(--app-text);
+}
+
+.dark body,
+html.dark body {
+  background-color: var(--app-bg);
+  color: var(--app-text);
+}
+
+html.dark .bg-white {
+  background-color: var(--app-surface);
+}
+
+html.dark .bg-slate-50,
+html.dark .bg-slate-50\/70 {
+  background-color: rgba(15, 23, 42, 0.45);
+}
+
+html.dark .bg-slate-200\/70 {
+  background-color: rgba(51, 65, 85, 0.55);
+}
+
+html.dark .text-slate-900 {
+  color: var(--app-text);
+}
+
+html.dark .text-slate-700,
+html.dark .text-slate-600 {
+  color: #CBD5E1;
+}
+
+html.dark .text-slate-500 {
+  color: #94A3B8;
+}
+
+html.dark .border-slate-200,
+html.dark .border-slate-300,
+html.dark .border-slate-100 {
+  border-color: var(--app-border);
+}
+
+html.dark input,
+html.dark select,
+html.dark textarea {
+  background-color: rgba(15, 23, 42, 0.65);
+  color: var(--app-text);
+  border-color: var(--app-border);
+}
+
+html.dark .hover\:bg-slate-50:hover,
+html.dark .hover\:bg-slate-100:hover,
+html.dark .hover\:bg-slate-50\/70:hover {
+  background-color: rgba(255, 255, 255, 0.06);
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Custom subtle scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #CBD5E1;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94A3B8;
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+}
