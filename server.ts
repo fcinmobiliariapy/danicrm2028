@@ -1,9 +1,13 @@
+import cookieParser from 'cookie-parser';
+import express from 'express';
+import fs from 'fs';
+import path from 'path';
 import { initSchema } from './src/server/db.js';
 import { registerApiRoutes } from './src/server/routes.js';
 import { seedDatabase } from './src/server/seed.js';
 
-
 const app = express();
+
 
 app.use(express.json({ limit: '12mb' }));
 app.use(cookieParser());
