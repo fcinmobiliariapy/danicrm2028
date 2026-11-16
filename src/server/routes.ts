@@ -10,7 +10,7 @@ import {
   signToken,
   verifyPassword,
 } from './auth.ts';
-import { db, logAudit } from './db.ts';
+import { db, logAudit } from './db.js';
 
 type PeopleTable = 'coordinators' | 'youth_members' | 'women_members';
 
