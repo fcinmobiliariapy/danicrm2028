@@ -204,6 +204,7 @@ export async function initSchema() {
       id INTEGER PRIMARY KEY CHECK (id = 1),
       platform_name TEXT NOT NULL DEFAULT 'CRM Político – Gestión Territorial',
       organization_name TEXT NOT NULL DEFAULT '',
+      campaign_reference TEXT NOT NULL DEFAULT '',
       logo_url TEXT DEFAULT '',
       primary_color TEXT DEFAULT '#1e40af',
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
