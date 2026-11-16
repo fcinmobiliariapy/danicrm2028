@@ -2,7 +2,11 @@ import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 
-const dataDir = path.resolve(process.cwd(), 'data');
+// En Vercel solo se permite escribir en la carpeta /tmp
+const dataDir = process.env.VERCEL
+  ? '/tmp/data'
+  : path.resolve(process.cwd(), 'data');
+
 if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
 }
@@ -12,7 +16,6 @@ export const db = new Database(dbPath);
 
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
-
 export function initSchema() {
   db.exec(`
     CREATE TABLE IF NOT EXISTS roles (
