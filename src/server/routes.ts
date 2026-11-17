@@ -363,57 +363,8 @@ export function registerApiRoutes(app: Express) {
   });
 
   // Quick coordinator search for Vote Projections
-  app.get('/api/people/coordinators/search', requireAuth, requirePermission('projections:view'), async (req: AuthRequest, res: Response) => {
-    const q = String(req.query.q || '').trim();
-    const canSensitive = req.user!.role_slug === 'super_admin' || !!req.user!.permissions['sensitive_data:view'];
-    const like = `%${q}%`;
-    const rowsRes = await db.execute({
-      sql: `SELECT c.id, c.first_name, c.last_name, c.ci, c.department_id, c.district_id, c.seccional_number,
-                   d.name AS department_name, dis.name AS district_name
-            FROM coordinators c
-            JOIN departments d ON d.id = c.department_id
-            JOIN districts dis ON dis.id = c.district_id
-            WHERE c.first_name LIKE ? OR c.last_name LIKE ? OR c.ci LIKE ? OR CAST(c.seccional_number AS TEXT) LIKE ?
-            ORDER BY c.last_name ASC, c.first_name ASC
-            LIMIT 25`,
-      args: [like, like, like, like],
-    });
-    res.json(
-      rowsRes.rows.map((r) => ({
-        ...r,
-        ci: maskSensitive(String(r.ci || ''), canSensitive),
-      }))
-    );
-  });
-
-  // Quick coordinator search for Vote Projections
-  app.get('/api/people/coordinators/search', requireAuth, requirePermission('projections:view'), (req: AuthRequest, res: Response) => {
-    const q = String(req.query.q || '').trim();
-    const canSensitive = req.user!.role_slug === 'super_admin' || !!req.user!.permissions['sensitive_data:view'];
-    const like = `%${q}%`;
-    const rows = db
-      .prepare(
-        `SELECT c.id, c.first_name, c.last_name, c.ci, c.department_id, c.district_id, c.seccional_number,
-                d.name AS department_name, dis.name AS district_name
-         FROM coordinators c
-         JOIN departments d ON d.id = c.department_id
-         JOIN districts dis ON dis.id = c.district_id
-         WHERE c.first_name LIKE ? OR c.last_name LIKE ? OR c.ci LIKE ? OR CAST(c.seccional_number AS TEXT) LIKE ?
-         ORDER BY c.last_name ASC, c.first_name ASC
-         LIMIT 25`
-      )
-      .all(like, like, like, like) as Record<string, unknown>[];
-
-    res.json(
-      rows.map((r) => ({
-        ...r,
-        ci: maskSensitive(String(r.ci || ''), canSensitive),
-      }))
-    );
-  });
-
   // People modules (coordinators, youth, women)
-  app.get('/api/people/:module', requireAuth, (req: AuthRequest, res: Response) => {
+  app.get('/api/people/:module', requireAuth, async (req: AuthRequest, res: Response) => {
     const info = resolvePeopleTable(req.params.module);
     if (!info) return res.status(404).json({ error: 'Módulo no válido.' });
     if (req.user!.role_slug !== 'super_admin' && !req.user!.permissions[`${info.permPrefix}:view`]) {
@@ -430,7 +381,7 @@ export function registerApiRoutes(app: Express) {
     const offset = (page - 1) * limit;
 
     let where = `WHERE 1=1`;
-    const params: unknown[] = [];
+    const params: (string | number)[] = [];
 
     if (search) {
       where += ` AND (t.first_name LIKE ? OR t.last_name LIKE ? OR t.ci LIKE ? OR t.phone LIKE ?)`;
@@ -450,34 +401,36 @@ export function registerApiRoutes(app: Express) {
       params.push(seccionalNumber);
     }
 
-    const total = (
-      db.prepare(`SELECT COUNT(*) AS c FROM ${info.table} t ${where}`).get(...params) as { c: number }
-    ).c;
+    const [totalRes, rowsRes, locRes] = await Promise.all([
+      db.execute({
+        sql: `SELECT COUNT(*) AS c FROM ${info.table} t ${where}`,
+        args: params,
+      }),
+      db.execute({
+        sql: `SELECT t.*, d.name AS department_name, dis.name AS district_name
+              FROM ${info.table} t
+              JOIN departments d ON d.id = t.department_id
+              JOIN districts dis ON dis.id = t.district_id
+              ${where}
+              ORDER BY t.id DESC
+              LIMIT ? OFFSET ?`,
+        args: [...params, limit, offset],
+      }),
+      db.execute({
+        sql: `SELECT d.name AS department_name, dis.name AS district_name, COUNT(*) AS total
+              FROM ${info.table} t
+              JOIN departments d ON d.id = t.department_id
+              JOIN districts dis ON dis.id = t.district_id
+              ${where}
+              GROUP BY d.name, dis.name
+              ORDER BY total DESC
+              LIMIT 8`,
+        args: params,
+      }),
+    ]);
 
-    const rows = db
-      .prepare(
-        `SELECT t.*, d.name AS department_name, dis.name AS district_name
-         FROM ${info.table} t
-         JOIN departments d ON d.id = t.department_id
-         JOIN districts dis ON dis.id = t.district_id
-         ${where}
-         ORDER BY t.id DESC
-         LIMIT ? OFFSET ?`
-      )
-      .all(...params, limit, offset) as Record<string, unknown>[];
-
-    const locationSummary = db
-      .prepare(
-        `SELECT d.name AS department_name, dis.name AS district_name, COUNT(*) AS total
-         FROM ${info.table} t
-         JOIN departments d ON d.id = t.department_id
-         JOIN districts dis ON dis.id = t.district_id
-         ${where}
-         GROUP BY d.name, dis.name
-         ORDER BY total DESC
-         LIMIT 8`
-      )
-      .all(...params);
+    const total = Number(totalRes.rows[0]?.c || 0);
+    const rows = rowsRes.rows as unknown as Record<string, unknown>[];
 
     res.json({
       items: rows.map((r) => ({
@@ -491,12 +444,12 @@ export function registerApiRoutes(app: Express) {
       page,
       limit,
       totalPages: Math.max(1, Math.ceil(total / limit)),
-      locationSummary,
+      locationSummary: locRes.rows,
       canViewSensitive: canSensitive,
     });
   });
 
-  app.post('/api/people/:module', requireAuth, (req: AuthRequest, res: Response) => {
+  app.post('/api/people/:module', requireAuth, async (req: AuthRequest, res: Response) => {
     const info = resolvePeopleTable(req.params.module);
     if (!info) return res.status(404).json({ error: 'Módulo no válido.' });
     if (req.user!.role_slug !== 'super_admin' && !req.user!.permissions[`${info.permPrefix}:create`]) {
@@ -523,17 +476,18 @@ export function registerApiRoutes(app: Express) {
       return res.status(400).json({ error: 'Debe confirmar el consentimiento de protección de datos personales.' });
     }
 
-    const dup = db.prepare(`SELECT id FROM ${info.table} WHERE ci = ?`).get(ci);
-    if (dup) {
+    const dupRes = await db.execute({
+      sql: `SELECT id FROM ${info.table} WHERE ci = ?`,
+      args: [ci],
+    });
+    if (dupRes.rows.length > 0) {
       return res.status(409).json({ error: `Ya existe un registro en ${info.label} con la C.I. ${ci}.` });
     }
 
-    const result = db
-      .prepare(
-        `INSERT INTO ${info.table} (first_name, last_name, ci, department_id, district_id, seccional_number, phone, registered_at, notes, consent_accepted, custom_fields_json, created_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      )
-      .run(
+    const result = await db.execute({
+      sql: `INSERT INTO ${info.table} (first_name, last_name, ci, department_id, district_id, seccional_number, phone, registered_at, notes, consent_accepted, custom_fields_json, created_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      args: [
         firstName,
         lastName,
         ci,
@@ -545,240 +499,25 @@ export function registerApiRoutes(app: Express) {
         notes,
         consentAccepted,
         JSON.stringify(customFields),
-        req.user!.id
-      );
+        req.user!.id,
+      ],
+    });
 
-    logAudit(
+    const newId = Number(result.lastInsertRowid);
+    await logAudit(
       req.user!.id,
       req.user!.username,
       'CREAR',
       info.permPrefix,
-      result.lastInsertRowid,
+      newId,
       `Registro de ${firstName} ${lastName} (C.I. ${ci}, Secc. ${seccionalNumber})`
     );
 
-    const created = db.prepare(`SELECT * FROM ${info.table} WHERE id = ?`).get(result.lastInsertRowid);
-    res.status(201).json(created);
-  });
-
-  app.put('/api/people/:module/:id', requireAuth, (req: AuthRequest, res: Response) => {
-    const info = resolvePeopleTable(req.params.module);
-    if (!info) return res.status(404).json({ error: 'Módulo no válido.' });
-    if (req.user!.role_slug !== 'super_admin' && !req.user!.permissions[`${info.permPrefix}:edit`]) {
-      return res.status(403).json({ error: 'Sin permiso para editar registros en este módulo.' });
-    }
-
-    const id = Number(req.params.id);
-    const existing = db.prepare(`SELECT * FROM ${info.table} WHERE id = ?`).get(id) as Record<string, unknown> | undefined;
-    if (!existing) return res.status(404).json({ error: 'Registro no encontrado.' });
-
-    const b = req.body || {};
-    const firstName = String(b.first_name ?? existing.first_name).trim();
-    const lastName = String(b.last_name ?? existing.last_name).trim();
-    const ci = String(b.ci ?? existing.ci).replace(/\./g, '').trim();
-    const departmentId = Number(b.department_id ?? existing.department_id);
-    const districtId = Number(b.district_id ?? existing.district_id);
-    const seccionalNumber = Number(b.seccional_number ?? existing.seccional_number);
-    const phone = String(b.phone ?? existing.phone).trim();
-    const registeredAt = String(b.registered_at ?? existing.registered_at);
-    const notes = String(b.notes ?? existing.notes).trim();
-    const customFields =
-      b.custom_fields && typeof b.custom_fields === 'object'
-        ? JSON.stringify(b.custom_fields)
-        : String(existing.custom_fields_json || '{}');
-
-    const dup = db.prepare(`SELECT id FROM ${info.table} WHERE ci = ? AND id != ?`).get(ci, id);
-    if (dup) {
-      return res.status(409).json({ error: `Ya existe otro registro con la C.I. ${ci}.` });
-    }
-
-    db.prepare(
-      `UPDATE ${info.table}
-       SET first_name = ?, last_name = ?, ci = ?, department_id = ?, district_id = ?, seccional_number = ?,
-           phone = ?, registered_at = ?, notes = ?, custom_fields_json = ?, updated_at = datetime('now')
-       WHERE id = ?`
-    ).run(firstName, lastName, ci, departmentId, districtId, seccionalNumber, phone, registeredAt, notes, customFields, id);
-
-    // Keep linked vote projections synchronized with coordinator's location if edited
-    if (info.table === 'coordinators') {
-      db.prepare(
-        `UPDATE vote_projections SET department_id = ?, district_id = ?, seccional_number = ? WHERE coordinator_id = ?`
-      ).run(departmentId, districtId, seccionalNumber, id);
-    }
-
-    logAudit(
-      req.user!.id,
-      req.user!.username,
-      'EDITAR',
-      info.permPrefix,
-      id,
-      `Actualización de ${firstName} ${lastName} (C.I. ${ci})`
-    );
-
-    res.json(db.prepare(`SELECT * FROM ${info.table} WHERE id = ?`).get(id));
-  });
-
-  app.delete('/api/people/:module/:id', requireAuth, (req: AuthRequest, res: Response) => {
-    const info = resolvePeopleTable(req.params.module);
-    if (!info) return res.status(404).json({ error: 'Módulo no válido.' });
-    if (req.user!.role_slug !== 'super_admin' && !req.user!.permissions[`${info.permPrefix}:delete`]) {
-      return res.status(403).json({ error: 'Sin permiso para eliminar registros.' });
-    }
-    const id = Number(req.params.id);
-    const existing = db.prepare(`SELECT first_name, last_name, ci FROM ${info.table} WHERE id = ?`).get(id) as
-      | { first_name: string; last_name: string; ci: string }
-      | undefined;
-    if (!existing) return res.status(404).json({ error: 'Registro no encontrado.' });
-
-    db.prepare(`DELETE FROM ${info.table} WHERE id = ?`).run(id);
-    logAudit(
-      req.user!.id,
-      req.user!.username,
-      'ELIMINAR',
-      info.permPrefix,
-      id,
-      `Eliminación de ${existing.first_name} ${existing.last_name} (C.I. ${existing.ci})`
-    );
-    res.json({ ok: true });
-  });
-
-  // ONP Module (Organización No Política)
-  app.get('/api/onp', requireAuth, requirePermission('onp:view'), (req: AuthRequest, res: Response) => {
-    const canSensitive = req.user!.role_slug === 'super_admin' || !!req.user!.permissions['sensitive_data:view'];
-    const search = String(req.query.search || '').trim();
-    const organization = String(req.query.organization || '').trim();
-    const sortBy = String(req.query.sort_by || 'full_name');
-    const page = Math.max(1, Number(req.query.page || 1));
-    const limit = Math.min(500, Math.max(1, Number(req.query.limit || 15)));
-    const offset = (page - 1) * limit;
-
-    let where = `WHERE 1=1`;
-    const params: unknown[] = [];
-    if (search) {
-      where += ` AND (full_name LIKE ? OR phone LIKE ? OR organization LIKE ? OR notes LIKE ?)`;
-      const like = `%${search}%`;
-      params.push(like, like, like, like);
-    }
-    if (organization) {
-      where += ` AND organization = ?`;
-      params.push(organization);
-    }
-
-    const orderClause =
-      sortBy === 'organization'
-        ? `ORDER BY LOWER(organization) ASC, LOWER(full_name) ASC, id ASC`
-        : sortBy === 'id'
-        ? `ORDER BY id ASC`
-        : `ORDER BY LOWER(full_name) ASC, LOWER(organization) ASC, id ASC`;
-
-    const total = (db.prepare(`SELECT COUNT(*) AS c FROM onp_members ${where}`).get(...params) as { c: number }).c;
-    const rows = db
-      .prepare(`SELECT * FROM onp_members ${where} ${orderClause} LIMIT ? OFFSET ?`)
-      .all(...params, limit, offset) as Record<string, unknown>[];
-
-    const organizations = db
-      .prepare(`SELECT organization, COUNT(*) AS total FROM onp_members GROUP BY organization ORDER BY LOWER(organization) ASC`)
-      .all() as { organization: string; total: number }[];
-
-    res.json({
-      items: rows.map((r) => ({
-        ...r,
-        phone_raw: canSensitive ? r.phone : undefined,
-        phone: maskSensitive(String(r.phone || ''), canSensitive),
-        custom_fields: JSON.parse(String(r.custom_fields_json || '{}')),
-      })),
-      total,
-      page,
-      limit,
-      totalPages: Math.max(1, Math.ceil(total / limit)),
-      organizations,
-      canViewSensitive: canSensitive,
+    const createdRes = await db.execute({
+      sql: `SELECT * FROM ${info.table} WHERE id = ?`,
+      args: [newId],
     });
-  });
-
-  app.post('/api/onp', requireAuth, requirePermission('onp:create'), (req: AuthRequest, res: Response) => {
-    const b = req.body || {};
-    const fullName = String(b.full_name || '').trim();
-    const phone = String(b.phone || '').trim();
-    const organization = String(b.organization || '').trim();
-    const registeredAt = String(b.registered_at || new Date().toISOString().slice(0, 10));
-    const notes = String(b.notes || '').trim();
-    const customFields = b.custom_fields && typeof b.custom_fields === 'object' ? b.custom_fields : {};
-
-    if (!fullName || !phone || !organization) {
-      return res.status(400).json({
-        error: 'Complete todos los campos obligatorios (Nombres y Apellidos, Teléfono y Organización/Institución).',
-      });
-    }
-
-    const result = db
-      .prepare(
-        `INSERT INTO onp_members (full_name, phone, organization, registered_at, notes, custom_fields_json, created_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`
-      )
-      .run(fullName, phone, organization, registeredAt, notes, JSON.stringify(customFields), req.user!.id);
-
-    logAudit(
-      req.user!.id,
-      req.user!.username,
-      'CREAR',
-      'onp',
-      result.lastInsertRowid,
-      `Registro ONP: ${fullName} (${organization})`
-    );
-
-    res.status(201).json(db.prepare(`SELECT * FROM onp_members WHERE id = ?`).get(result.lastInsertRowid));
-  });
-
-  app.put('/api/onp/:id', requireAuth, requirePermission('onp:edit'), (req: AuthRequest, res: Response) => {
-    const id = Number(req.params.id);
-    const existing = db.prepare(`SELECT * FROM onp_members WHERE id = ?`).get(id) as Record<string, unknown> | undefined;
-    if (!existing) return res.status(404).json({ error: 'Registro ONP no encontrado.' });
-
-    const b = req.body || {};
-    const fullName = String(b.full_name ?? existing.full_name).trim();
-    const phone = String(b.phone ?? existing.phone).trim();
-    const organization = String(b.organization ?? existing.organization).trim();
-    const registeredAt = String(b.registered_at ?? existing.registered_at);
-    const notes = String(b.notes ?? existing.notes).trim();
-    const customFields =
-      b.custom_fields && typeof b.custom_fields === 'object'
-        ? JSON.stringify(b.custom_fields)
-        : String(existing.custom_fields_json || '{}');
-
-    if (!fullName || !phone || !organization) {
-      return res.status(400).json({
-        error: 'Complete todos los campos obligatorios (Nombres y Apellidos, Teléfono y Organización/Institución).',
-      });
-    }
-
-    db.prepare(
-      `UPDATE onp_members
-       SET full_name = ?, phone = ?, organization = ?, registered_at = ?, notes = ?, custom_fields_json = ?, updated_at = datetime('now')
-       WHERE id = ?`
-    ).run(fullName, phone, organization, registeredAt, notes, customFields, id);
-
-    logAudit(req.user!.id, req.user!.username, 'EDITAR', 'onp', id, `Actualización ONP: ${fullName} (${organization})`);
-    res.json(db.prepare(`SELECT * FROM onp_members WHERE id = ?`).get(id));
-  });
-
-  app.delete('/api/onp/:id', requireAuth, requirePermission('onp:delete'), (req: AuthRequest, res: Response) => {
-    const id = Number(req.params.id);
-    const existing = db.prepare(`SELECT full_name, organization FROM onp_members WHERE id = ?`).get(id) as
-      | { full_name: string; organization: string }
-      | undefined;
-    if (!existing) return res.status(404).json({ error: 'Registro ONP no encontrado.' });
-
-    db.prepare(`DELETE FROM onp_members WHERE id = ?`).run(id);
-    logAudit(
-      req.user!.id,
-      req.user!.username,
-      'ELIMINAR',
-      'onp',
-      id,
-      `Eliminación ONP: ${existing.full_name} (${existing.organization})`
-    );
-    res.json({ ok: true });
+    res.status(201).json(createdRes.rows[0]);
   });
 
   // Vote Projections
