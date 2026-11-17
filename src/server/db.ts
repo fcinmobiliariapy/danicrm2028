@@ -255,3 +255,18 @@ export async function initSchema() {
       text_color TEXT DEFAULT '#0F172A',
       font_family TEXT DEFAULT 'Plus Jakarta Sans',
       font_size_scale TEXT DEFAULT 'normal',
+      border_radius TEXT DEFAULT 'rounded',
+header_text TEXT DEFAULT '',
+footer_text TEXT DEFAULT '',
+institutional_text TEXT DEFAULT '',
+contact_phone TEXT DEFAULT '',
+contact_email TEXT DEFAULT '',
+contact_address TEXT DEFAULT '',
+document_format TEXT DEFAULT 'A4',
+date_format TEXT DEFAULT 'DD/MM/YYYY',
+report_show_charts INTEGER DEFAULT 1,
+report_show_totals INTEGER DEFAULT 1,
+updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+)`
+], 'write');
+}
