@@ -583,17 +583,15 @@ export function registerApiRoutes(app: Express) {
     res.json(events);
   });
 
-  app.post('/api/agenda', requireAuth, requirePermission('agenda:create'), (req: AuthRequest, res: Response) => {
+   app.post('/api/agenda', requireAuth, requirePermission('agenda:create'), async (req: AuthRequest, res: Response) => {
     const b = req.body || {};
     if (!b.title || !b.event_type || !b.event_date || !b.start_time || !b.end_time) {
       return res.status(400).json({ error: 'Título, tipo, fecha y horario son obligatorios.' });
     }
-    const info = db
-      .prepare(
-        `INSERT INTO agenda_events (title, event_type, event_date, start_time, end_time, department_id, district_id, seccional_number, location, responsible, participants, description, notes, reminder_minutes, status, custom_fields_json, created_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      )
-      .run(
+    const info = await db.execute({
+      sql: `INSERT INTO agenda_events (title, event_type, event_date, start_time, end_time, department_id, district_id, seccional_number, location, responsible, participants, description, notes, reminder_minutes, status, custom_fields_json, created_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      args: [
         String(b.title).trim(),
         String(b.event_type),
         String(b.event_date),
@@ -610,80 +608,90 @@ export function registerApiRoutes(app: Express) {
         Number(b.reminder_minutes ?? 60),
         String(b.status || 'programado'),
         JSON.stringify(b.custom_fields || {}),
-        req.user!.id
-      );
+        req.user!.id,
+      ],
+    });
 
-    db.prepare(`INSERT INTO activities (event_id, summary, attendance_count, outcomes, logged_by) VALUES (?, ?, 0, ?, ?)`).run(
-      info.lastInsertRowid,
-      'Evento creado en agenda oficial.',
-      'Pendiente de realización.',
-      req.user!.username
-    );
+    const newId = Number(info.lastInsertRowid);
 
-    logAudit(req.user!.id, req.user!.username, 'CREAR', 'agenda', info.lastInsertRowid, `Actividad: ${b.title} (${b.event_date})`);
-    res.status(201).json(db.prepare(`SELECT * FROM agenda_events WHERE id = ?`).get(info.lastInsertRowid));
+    await db.execute({
+      sql: `INSERT INTO activities (event_id, summary, attendance_count, outcomes, logged_by) VALUES (?, ?, 0, ?, ?)`,
+      args: [newId, 'Evento creado en agenda oficial.', 'Pendiente de realización.', req.user!.username],
+    });
+
+    await logAudit(req.user!.id, req.user!.username, 'CREAR', 'agenda', newId, `Actividad: ${b.title} (${b.event_date})`);
+    const createdRes = await db.execute({ sql: `SELECT * FROM agenda_events WHERE id = ?`, args: [newId] });
+    res.status(201).json(createdRes.rows[0]);
   });
 
-  app.put('/api/agenda/:id', requireAuth, requirePermission('agenda:edit'), (req: AuthRequest, res: Response) => {
+  app.put('/api/agenda/:id', requireAuth, requirePermission('agenda:edit'), async (req: AuthRequest, res: Response) => {
     const id = Number(req.params.id);
-    const existing = db.prepare(`SELECT * FROM agenda_events WHERE id = ?`).get(id) as Record<string, unknown> | undefined;
+    const existingRes = await db.execute({ sql: `SELECT * FROM agenda_events WHERE id = ?`, args: [id] });
+    const existing = existingRes.rows[0] as Record<string, unknown> | undefined;
     if (!existing) return res.status(404).json({ error: 'Evento no encontrado.' });
     const b = req.body || {};
 
-    db.prepare(
-      `UPDATE agenda_events SET
-        title = ?, event_type = ?, event_date = ?, start_time = ?, end_time = ?,
-        department_id = ?, district_id = ?, seccional_number = ?,
-        location = ?, responsible = ?, participants = ?, description = ?, notes = ?,
-        reminder_minutes = ?, status = ?, updated_at = datetime('now')
-       WHERE id = ?`
-    ).run(
-      b.title ?? existing.title,
-      b.event_type ?? existing.event_type,
-      b.event_date ?? existing.event_date,
-      b.start_time ?? existing.start_time,
-      b.end_time ?? existing.end_time,
-      b.department_id !== undefined ? (b.department_id ? Number(b.department_id) : null) : existing.department_id,
-      b.district_id !== undefined ? (b.district_id ? Number(b.district_id) : null) : existing.district_id,
-      b.seccional_number !== undefined ? (b.seccional_number ? Number(b.seccional_number) : null) : existing.seccional_number,
-      b.location ?? existing.location,
-      b.responsible ?? existing.responsible,
-      b.participants ?? existing.participants,
-      b.description ?? existing.description,
-      b.notes ?? existing.notes,
-      b.reminder_minutes ?? existing.reminder_minutes,
-      b.status ?? existing.status,
-      id
-    );
+    await db.execute({
+      sql: `UPDATE agenda_events SET
+              title = ?, event_type = ?, event_date = ?, start_time = ?, end_time = ?,
+              department_id = ?, district_id = ?, seccional_number = ?,
+              location = ?, responsible = ?, participants = ?, description = ?, notes = ?,
+              reminder_minutes = ?, status = ?, updated_at = datetime('now')
+            WHERE id = ?`,
+      args: [
+        b.title ?? existing.title,
+        b.event_type ?? existing.event_type,
+        b.event_date ?? existing.event_date,
+        b.start_time ?? existing.start_time,
+        b.end_time ?? existing.end_time,
+        b.department_id !== undefined ? (b.department_id ? Number(b.department_id) : null) : existing.department_id,
+        b.district_id !== undefined ? (b.district_id ? Number(b.district_id) : null) : existing.district_id,
+        b.seccional_number !== undefined ? (b.seccional_number ? Number(b.seccional_number) : null) : existing.seccional_number,
+        b.location ?? existing.location,
+        b.responsible ?? existing.responsible,
+        b.participants ?? existing.participants,
+        b.description ?? existing.description,
+        b.notes ?? existing.notes,
+        b.reminder_minutes ?? existing.reminder_minutes,
+        b.status ?? existing.status,
+        id,
+      ],
+    });
 
-    logAudit(req.user!.id, req.user!.username, 'EDITAR', 'agenda', id, `Evento actualizado: ${b.title ?? existing.title}`);
-    res.json(db.prepare(`SELECT * FROM agenda_events WHERE id = ?`).get(id));
+    await logAudit(req.user!.id, req.user!.username, 'EDITAR', 'agenda', id, `Evento actualizado: ${b.title ?? existing.title}`);
+    const updatedRes = await db.execute({ sql: `SELECT * FROM agenda_events WHERE id = ?`, args: [id] });
+    res.json(updatedRes.rows[0]);
   });
 
-  app.post('/api/agenda/:id/activity', requireAuth, requirePermission('agenda:edit'), (req: AuthRequest, res: Response) => {
+  app.post('/api/agenda/:id/activity', requireAuth, requirePermission('agenda:edit'), async (req: AuthRequest, res: Response) => {
     const id = Number(req.params.id);
     const { summary, attendance_count, outcomes, status } = req.body || {};
-    const existing = db.prepare(`SELECT id FROM activities WHERE event_id = ?`).get(id);
-    if (existing) {
-      db.prepare(
-        `UPDATE activities SET summary = ?, attendance_count = ?, outcomes = ?, logged_by = ?, logged_at = datetime('now') WHERE event_id = ?`
-      ).run(summary || '', Number(attendance_count || 0), outcomes || '', req.user!.username, id);
+    const existingRes = await db.execute({ sql: `SELECT id FROM activities WHERE event_id = ?`, args: [id] });
+    if (existingRes.rows.length > 0) {
+      await db.execute({
+        sql: `UPDATE activities SET summary = ?, attendance_count = ?, outcomes = ?, logged_by = ?, logged_at = datetime('now') WHERE event_id = ?`,
+        args: [summary || '', Number(attendance_count || 0), outcomes || '', req.user!.username, id],
+      });
     } else {
-      db.prepare(
-        `INSERT INTO activities (event_id, summary, attendance_count, outcomes, logged_by) VALUES (?, ?, ?, ?, ?)`
-      ).run(id, summary || '', Number(attendance_count || 0), outcomes || '', req.user!.username);
+      await db.execute({
+        sql: `INSERT INTO activities (event_id, summary, attendance_count, outcomes, logged_by) VALUES (?, ?, ?, ?, ?)`,
+        args: [id, summary || '', Number(attendance_count || 0), outcomes || '', req.user!.username],
+      });
     }
     if (status) {
-      db.prepare(`UPDATE agenda_events SET status = ?, updated_at = datetime('now') WHERE id = ?`).run(status, id);
+      await db.execute({
+        sql: `UPDATE agenda_events SET status = ?, updated_at = datetime('now') WHERE id = ?`,
+        args: [status, id],
+      });
     }
-    logAudit(req.user!.id, req.user!.username, 'SEGUIMIENTO', 'agenda', id, `Registro de acta/asistencia (${attendance_count || 0} participantes)`);
+    await logAudit(req.user!.id, req.user!.username, 'SEGUIMIENTO', 'agenda', id, `Registro de acta/asistencia (${attendance_count || 0} participantes)`);
     res.json({ ok: true });
   });
 
-  app.delete('/api/agenda/:id', requireAuth, requirePermission('agenda:delete'), (req: AuthRequest, res: Response) => {
+  app.delete('/api/agenda/:id', requireAuth, requirePermission('agenda:delete'), async (req: AuthRequest, res: Response) => {
     const id = Number(req.params.id);
-    db.prepare(`DELETE FROM agenda_events WHERE id = ?`).run(id);
-    logAudit(req.user!.id, req.user!.username, 'ELIMINAR', 'agenda', id, 'Evento eliminado de agenda');
+    await db.execute({ sql: `DELETE FROM agenda_events WHERE id = ?`, args: [id] });
+    await logAudit(req.user!.id, req.user!.username, 'ELIMINAR', 'agenda', id, 'Evento eliminado de agenda');
     res.json({ ok: true });
   });
 
