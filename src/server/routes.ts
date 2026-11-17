@@ -748,16 +748,18 @@ export function registerApiRoutes(app: Express) {
       res.status(409).json({ error: 'No se puede eliminar: existen registros vinculados a este departamento.' });
     }
   });
-
-  app.post('/api/territorial/districts', requireAuth, requirePermission('territorial:manage'), (req: AuthRequest, res: Response) => {
+  app.post('/api/territorial/districts', requireAuth, requirePermission('territorial:manage'), async (req: AuthRequest, res: Response) => {
     const { department_id, name, active } = req.body || {};
     if (!department_id || !name) return res.status(400).json({ error: 'Departamento y nombre de distrito obligatorios.' });
     try {
-      const info = db
-        .prepare(`INSERT INTO districts (department_id, name, active) VALUES (?, ?, ?)`)
-        .run(Number(department_id), String(name).trim(), active !== false ? 1 : 0);
-      logAudit(req.user!.id, req.user!.username, 'CREAR', 'territorial', info.lastInsertRowid, `Distrito: ${name}`);
-      res.status(201).json(db.prepare(`SELECT * FROM districts WHERE id = ?`).get(info.lastInsertRowid));
+      const info = await db.execute({
+        sql: `INSERT INTO districts (department_id, name, active) VALUES (?, ?, ?)`,
+        args: [Number(department_id), String(name).trim(), active !== false ? 1 : 0],
+      });
+      const newId = Number(info.lastInsertRowid);
+      await logAudit(req.user!.id, req.user!.username, 'CREAR', 'territorial', newId, `Distrito: ${name}`);
+      const createdRes = await db.execute({ sql: `SELECT * FROM districts WHERE id = ?`, args: [newId] });
+      res.status(201).json(createdRes.rows[0]);
     } catch {
       res.status(409).json({ error: 'Ya existe un distrito con ese nombre en este departamento.' });
     }
