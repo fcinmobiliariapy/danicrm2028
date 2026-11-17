@@ -8,17 +8,25 @@ import { seedDatabase } from './src/server/seed.js';
 
 const app = express();
 
-
 app.use(express.json({ limit: '12mb' }));
 app.use(cookieParser());
 
-// Inicializar esquema, datos semilla y rutas API
-try {
-  initSchema();
-  seedDatabase();
-} catch (error) {
-  console.error('Error inicializando base de datos:', error);
-}
+// Middleware para garantizar que Turso cree las tablas y datos iniciales antes de cualquier petición
+let isDbInitialized = false;
+
+app.use(async (_req, _res, next) => {
+  if (!isDbInitialized) {
+    try {
+      await initSchema();
+      await seedDatabase();
+      isDbInitialized = true;
+    } catch (error) {
+      console.error('Error inicializando base de datos en Turso:', error);
+      return next(error);
+    }
+  }
+  next();
+});
 
 registerApiRoutes(app);
 
