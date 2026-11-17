@@ -364,172 +364,16 @@ export function registerApiRoutes(app: Express) {
 
   // Quick coordinator search for Vote Projections
   // People modules (coordinators, youth, women)
-  app.get('/api/people/:module', requireAuth, async (req: AuthRequest, res: Response) => {
-    const info = resolvePeopleTable(req.params.module);
-    if (!info) return res.status(404).json({ error: 'Módulo no válido.' });
-    if (req.user!.role_slug !== 'super_admin' && !req.user!.permissions[`${info.permPrefix}:view`]) {
-      return res.status(403).json({ error: 'Sin permiso para consultar este módulo.' });
-    }
-
+  // Vote Projections
+  app.get('/api/projections', requireAuth, requirePermission('projections:view'), async (req: AuthRequest, res: Response) => {
     const canSensitive = req.user!.role_slug === 'super_admin' || !!req.user!.permissions['sensitive_data:view'];
-    const search = String(req.query.search || '').trim();
     const departmentId = req.query.department_id ? Number(req.query.department_id) : null;
     const districtId = req.query.district_id ? Number(req.query.district_id) : null;
     const seccionalNumber = req.query.seccional_number ? Number(req.query.seccional_number) : null;
-    const page = Math.max(1, Number(req.query.page || 1));
-    const limit = Math.min(200, Math.max(5, Number(req.query.limit || 15)));
-    const offset = (page - 1) * limit;
+    const search = String(req.query.search || '').trim();
 
     let where = `WHERE 1=1`;
     const params: (string | number)[] = [];
-
-    if (search) {
-      where += ` AND (t.first_name LIKE ? OR t.last_name LIKE ? OR t.ci LIKE ? OR t.phone LIKE ?)`;
-      const like = `%${search}%`;
-      params.push(like, like, like, like);
-    }
-    if (departmentId) {
-      where += ` AND t.department_id = ?`;
-      params.push(departmentId);
-    }
-    if (districtId) {
-      where += ` AND t.district_id = ?`;
-      params.push(districtId);
-    }
-    if (seccionalNumber) {
-      where += ` AND t.seccional_number = ?`;
-      params.push(seccionalNumber);
-    }
-
-    const [totalRes, rowsRes, locRes] = await Promise.all([
-      db.execute({
-        sql: `SELECT COUNT(*) AS c FROM ${info.table} t ${where}`,
-        args: params,
-      }),
-      db.execute({
-        sql: `SELECT t.*, d.name AS department_name, dis.name AS district_name
-              FROM ${info.table} t
-              JOIN departments d ON d.id = t.department_id
-              JOIN districts dis ON dis.id = t.district_id
-              ${where}
-              ORDER BY t.id DESC
-              LIMIT ? OFFSET ?`,
-        args: [...params, limit, offset],
-      }),
-      db.execute({
-        sql: `SELECT d.name AS department_name, dis.name AS district_name, COUNT(*) AS total
-              FROM ${info.table} t
-              JOIN departments d ON d.id = t.department_id
-              JOIN districts dis ON dis.id = t.district_id
-              ${where}
-              GROUP BY d.name, dis.name
-              ORDER BY total DESC
-              LIMIT 8`,
-        args: params,
-      }),
-    ]);
-
-    const total = Number(totalRes.rows[0]?.c || 0);
-    const rows = rowsRes.rows as unknown as Record<string, unknown>[];
-
-    res.json({
-      items: rows.map((r) => ({
-        ...r,
-        ci_raw: canSensitive ? r.ci : undefined,
-        ci: maskSensitive(String(r.ci || ''), canSensitive),
-        phone: maskSensitive(String(r.phone || ''), canSensitive),
-        custom_fields: JSON.parse(String(r.custom_fields_json || '{}')),
-      })),
-      total,
-      page,
-      limit,
-      totalPages: Math.max(1, Math.ceil(total / limit)),
-      locationSummary: locRes.rows,
-      canViewSensitive: canSensitive,
-    });
-  });
-
-  app.post('/api/people/:module', requireAuth, async (req: AuthRequest, res: Response) => {
-    const info = resolvePeopleTable(req.params.module);
-    if (!info) return res.status(404).json({ error: 'Módulo no válido.' });
-    if (req.user!.role_slug !== 'super_admin' && !req.user!.permissions[`${info.permPrefix}:create`]) {
-      return res.status(403).json({ error: 'Sin permiso para registrar en este módulo.' });
-    }
-
-    const b = req.body || {};
-    const firstName = String(b.first_name || '').trim();
-    const lastName = String(b.last_name || '').trim();
-    const ci = String(b.ci || '').replace(/\./g, '').trim();
-    const departmentId = Number(b.department_id);
-    const districtId = Number(b.district_id);
-    const seccionalNumber = Number(b.seccional_number);
-    const phone = String(b.phone || '').trim();
-    const registeredAt = String(b.registered_at || new Date().toISOString().slice(0, 10));
-    const notes = String(b.notes || '').trim();
-    const consentAccepted = b.consent_accepted !== false ? 1 : 0;
-    const customFields = b.custom_fields && typeof b.custom_fields === 'object' ? b.custom_fields : {};
-
-    if (!firstName || !lastName || !ci || !departmentId || !districtId || !seccionalNumber || !phone) {
-      return res.status(400).json({ error: 'Complete todos los campos obligatorios (Nombres, Apellidos, C.I., Ubicación, Seccional y Teléfono).' });
-    }
-    if (!consentAccepted) {
-      return res.status(400).json({ error: 'Debe confirmar el consentimiento de protección de datos personales.' });
-    }
-
-    const dupRes = await db.execute({
-      sql: `SELECT id FROM ${info.table} WHERE ci = ?`,
-      args: [ci],
-    });
-    if (dupRes.rows.length > 0) {
-      return res.status(409).json({ error: `Ya existe un registro en ${info.label} con la C.I. ${ci}.` });
-    }
-
-    const result = await db.execute({
-      sql: `INSERT INTO ${info.table} (first_name, last_name, ci, department_id, district_id, seccional_number, phone, registered_at, notes, consent_accepted, custom_fields_json, created_by)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      args: [
-        firstName,
-        lastName,
-        ci,
-        departmentId,
-        districtId,
-        seccionalNumber,
-        phone,
-        registeredAt,
-        notes,
-        consentAccepted,
-        JSON.stringify(customFields),
-        req.user!.id,
-      ],
-    });
-
-    const newId = Number(result.lastInsertRowid);
-    await logAudit(
-      req.user!.id,
-      req.user!.username,
-      'CREAR',
-      info.permPrefix,
-      newId,
-      `Registro de ${firstName} ${lastName} (C.I. ${ci}, Secc. ${seccionalNumber})`
-    );
-
-    const createdRes = await db.execute({
-      sql: `SELECT * FROM ${info.table} WHERE id = ?`,
-      args: [newId],
-    });
-    res.status(201).json(createdRes.rows[0]);
-  });
-
-  // Vote Projections
-  app.get('/api/projections', requireAuth, requirePermission('projections:view'), (req: AuthRequest, res: Response) => {
-    const canSensitive = req.user!.role_slug === 'super_admin' || !!req.user!.permissions['sensitive_data:view'];
-    const departmentId = req.query.department_id ? Number(req.query.department_id) : null;
-    const districtId = req.query.district_id ? Number(req.query.district_id) : null;
-    const seccionalNumber = req.query.seccional_number ? Number(req.query.seccional_number) : null;
-    const search = String(req.query.search || '').trim();
-
-    let where = `WHERE 1=1`;
-    const params: unknown[] = [];
     if (departmentId) {
       where += ` AND vp.department_id = ?`;
       params.push(departmentId);
@@ -548,30 +392,18 @@ export function registerApiRoutes(app: Express) {
       params.push(like, like, like, like, like);
     }
 
-    const items = db
-      .prepare(
-        `SELECT vp.*, c.first_name, c.last_name, c.ci,
-                d.name AS department_name, dis.name AS district_name
-         FROM vote_projections vp
-         JOIN coordinators c ON c.id = vp.coordinator_id
-         JOIN departments d ON d.id = vp.department_id
-         JOIN districts dis ON dis.id = vp.district_id
-         ${where}
-         ORDER BY vp.updated_at DESC, vp.id DESC`
-      )
-      .all(...params) as Record<string, unknown>[];
-
-    const byDepartment = db
-      .prepare(
-        `SELECT d.id, d.name, SUM(vp.estimated_votes) AS total_votes, COUNT(vp.id) AS records_count
-         FROM vote_projections vp
-         JOIN coordinators c ON c.id = vp.coordinator_id
-         JOIN departments d ON d.id = vp.department_id
-         ${where}
-         GROUP BY d.id, d.name
-         ORDER BY total_votes DESC`
-      )
-      .all(...params);
+    const itemsRes = await db.execute({
+      sql: `SELECT vp.*, c.first_name, c.last_name, c.ci,
+                   d.name AS department_name, dis.name AS district_name
+            FROM vote_projections vp
+            JOIN coordinators c ON c.id = vp.coordinator_id
+            JOIN departments d ON d.id = vp.department_id
+            JOIN districts dis ON dis.id = vp.district_id
+            ${where}
+            ORDER BY vp.updated_at DESC, vp.id DESC`,
+      args: params,
+    });
+    const items = itemsRes.rows as unknown as Record<string, unknown>[];
 
     const byDistrict = db
       .prepare(
