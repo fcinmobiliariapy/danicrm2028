@@ -5,6 +5,24 @@ export const db = createClient({
   authToken: process.env.TURSO_AUTH_TOKEN,
 });
 
+export async function logAudit(
+  userId: number | null,
+  username: string,
+  action: string,
+  module: string,
+  recordId: string | number | bigint | undefined,
+  details: string
+) {
+  try {
+    await db.execute({
+      sql: `INSERT INTO audit_logs (user_id, username, action, module, record_id, details) VALUES (?, ?, ?, ?, ?, ?)`,
+      args: [userId, username, action, module, recordId !== undefined ? String(recordId) : '', details],
+    });
+  } catch (err) {
+    console.error('Error registrando auditoría:', err);
+  }
+}
+
 export async function initSchema() {
   await db.batch([
     `PRAGMA foreign_keys = ON`,
@@ -200,14 +218,40 @@ export async function initSchema() {
       generated_by TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     )`,
+    `CREATE TABLE IF NOT EXISTS custom_fields (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      module TEXT NOT NULL,
+      field_key TEXT NOT NULL,
+      label TEXT NOT NULL,
+      field_type TEXT NOT NULL DEFAULT 'text',
+      required INTEGER NOT NULL DEFAULT 0,
+      active INTEGER NOT NULL DEFAULT 1,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      options_json TEXT DEFAULT '[]',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+    `CREATE TABLE IF NOT EXISTS audit_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER,
+      username TEXT NOT NULL DEFAULT '',
+      action TEXT NOT NULL,
+      module TEXT NOT NULL,
+      record_id TEXT DEFAULT '',
+      details TEXT DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
     `CREATE TABLE IF NOT EXISTS system_settings (
       id INTEGER PRIMARY KEY CHECK (id = 1),
       platform_name TEXT NOT NULL DEFAULT 'CRM Político – Gestión Territorial',
       organization_name TEXT NOT NULL DEFAULT '',
       campaign_reference TEXT NOT NULL DEFAULT '',
       logo_url TEXT DEFAULT '',
-      primary_color TEXT DEFAULT '#1e40af',
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    )`
-  ], 'write');
-}
+      institutional_image_url TEXT DEFAULT '',
+      primary_color TEXT DEFAULT '#1E3A8A',
+      secondary_color TEXT DEFAULT '#B91C1C',
+      theme_mode TEXT DEFAULT 'light',
+      background_color TEXT DEFAULT '#F8FAFC',
+      surface_color TEXT DEFAULT '#FFFFFF',
+      text_color TEXT DEFAULT '#0F172A',
+      font_family TEXT DEFAULT 'Plus Jakarta Sans',
+      font_size_scale TEXT DEFAULT 'normal',
