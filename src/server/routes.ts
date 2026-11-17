@@ -192,53 +192,68 @@ export function registerApiRoutes(app: Express) {
     }
   });
 
-  app.put('/api/custom-fields/:id', requireAuth, requirePermission('admin:manage'), (req: AuthRequest, res: Response) => {
+  app.put('/api/custom-fields/:id', requireAuth, requirePermission('admin:manage'), async (req: AuthRequest, res: Response) => {
     const id = Number(req.params.id);
     const { label, field_type, required, active, sort_order, options } = req.body || {};
-    const existing = db.prepare(`SELECT * FROM custom_fields WHERE id = ?`).get(id) as Record<string, unknown> | undefined;
+    const existingRes = await db.execute({ sql: `SELECT * FROM custom_fields WHERE id = ?`, args: [id] });
+    const existing = existingRes.rows[0] as Record<string, unknown> | undefined;
     if (!existing) return res.status(404).json({ error: 'Campo no encontrado.' });
-    db.prepare(
-      `UPDATE custom_fields SET label = ?, field_type = ?, required = ?, active = ?, sort_order = ?, options_json = ? WHERE id = ?`
-    ).run(
-      label ?? existing.label,
-      field_type ?? existing.field_type,
-      required !== undefined ? (required ? 1 : 0) : existing.required,
-      active !== undefined ? (active ? 1 : 0) : existing.active,
-      sort_order ?? existing.sort_order,
-      options !== undefined ? JSON.stringify(options) : existing.options_json,
-      id
-    );
-    logAudit(req.user!.id, req.user!.username, 'EDITAR', 'campos_personalizados', id, `Campo actualizado: ${label ?? existing.label}`);
-    res.json(db.prepare(`SELECT * FROM custom_fields WHERE id = ?`).get(id));
+    await db.execute({
+      sql: `UPDATE custom_fields SET label = ?, field_type = ?, required = ?, active = ?, sort_order = ?, options_json = ? WHERE id = ?`,
+      args: [
+        label ?? existing.label,
+        field_type ?? existing.field_type,
+        required !== undefined ? (required ? 1 : 0) : existing.required,
+        active !== undefined ? (active ? 1 : 0) : existing.active,
+        sort_order ?? existing.sort_order,
+        options !== undefined ? JSON.stringify(options) : existing.options_json,
+        id,
+      ],
+    });
+    await logAudit(req.user!.id, req.user!.username, 'EDITAR', 'campos_personalizados', id, `Campo actualizado: ${label ?? existing.label}`);
+    const updatedRes = await db.execute({ sql: `SELECT * FROM custom_fields WHERE id = ?`, args: [id] });
+    res.json(updatedRes.rows[0]);
   });
 
-  app.delete('/api/custom-fields/:id', requireAuth, requirePermission('admin:manage'), (req: AuthRequest, res: Response) => {
+  app.delete('/api/custom-fields/:id', requireAuth, requirePermission('admin:manage'), async (req: AuthRequest, res: Response) => {
     const id = Number(req.params.id);
-    db.prepare(`DELETE FROM custom_fields WHERE id = ?`).run(id);
-    logAudit(req.user!.id, req.user!.username, 'ELIMINAR', 'campos_personalizados', id, 'Campo eliminado');
+    await db.execute({ sql: `DELETE FROM custom_fields WHERE id = ?`, args: [id] });
+    await logAudit(req.user!.id, req.user!.username, 'ELIMINAR', 'campos_personalizados', id, 'Campo eliminado');
     res.json({ ok: true });
   });
 
   // Dashboard
-  app.get('/api/dashboard', requireAuth, requirePermission('dashboard:view'), (req: AuthRequest, res: Response) => {
+  app.get('/api/dashboard', requireAuth, requirePermission('dashboard:view'), async (req: AuthRequest, res: Response) => {
     const canSensitive = req.user!.role_slug === 'super_admin' || !!req.user!.permissions['sensitive_data:view'];
 
-    const totalCoordinators = (db.prepare(`SELECT COUNT(*) AS c FROM coordinators`).get() as { c: number }).c;
-    const totalYouth = (db.prepare(`SELECT COUNT(*) AS c FROM youth_members`).get() as { c: number }).c;
-    const totalWomen = (db.prepare(`SELECT COUNT(*) AS c FROM women_members`).get() as { c: number }).c;
-    const totalOnp = (db.prepare(`SELECT COUNT(*) AS c FROM onp_members`).get() as { c: number }).c;
-    const totalDepartments = (db.prepare(`SELECT COUNT(*) AS c FROM departments WHERE active = 1`).get() as { c: number }).c;
-    const totalDistricts = (db.prepare(`SELECT COUNT(*) AS c FROM districts WHERE active = 1`).get() as { c: number }).c;
-    const totalSeccionales = (db.prepare(`SELECT COUNT(*) AS c FROM seccionales WHERE active = 1`).get() as { c: number }).c;
-    const totalEstimatedVotes = (
-      db.prepare(`SELECT COALESCE(SUM(estimated_votes), 0) AS s FROM vote_projections`).get() as { s: number }
-    ).s;
-    const scheduledMeetings = (
-      db.prepare(`SELECT COUNT(*) AS c FROM agenda_events WHERE status = 'programado'`).get() as { c: number }
-    ).c;
-
-    const upcomingEvents = db
-      .prepare(
+    const [
+      coordRes,
+      youthRes,
+      womenRes,
+      onpRes,
+      deptRes,
+      distRes,
+      seccRes,
+      votesRes,
+      meetingsRes,
+      upcomingRes,
+      recCoordRes,
+      recYouthRes,
+      recWomenRes,
+      byDeptRes,
+      byDistRes,
+      bySeccRes,
+    ] = await Promise.all([
+      db.execute(`SELECT COUNT(*) AS c FROM coordinators`),
+      db.execute(`SELECT COUNT(*) AS c FROM youth_members`),
+      db.execute(`SELECT COUNT(*) AS c FROM women_members`),
+      db.execute(`SELECT COUNT(*) AS c FROM onp_members`),
+      db.execute(`SELECT COUNT(*) AS c FROM departments WHERE active = 1`),
+      db.execute(`SELECT COUNT(*) AS c FROM districts WHERE active = 1`),
+      db.execute(`SELECT COUNT(*) AS c FROM seccionales WHERE active = 1`),
+      db.execute(`SELECT COALESCE(SUM(estimated_votes), 0) AS s FROM vote_projections`),
+      db.execute(`SELECT COUNT(*) AS c FROM agenda_events WHERE status = 'programado'`),
+      db.execute(
         `SELECT e.*, d.name AS department_name, dis.name AS district_name
          FROM agenda_events e
          LEFT JOIN departments d ON d.id = e.department_id
@@ -246,49 +261,32 @@ export function registerApiRoutes(app: Express) {
          WHERE e.status = 'programado'
          ORDER BY e.event_date ASC, e.start_time ASC
          LIMIT 5`
-      )
-      .all();
-
-    const recentCoordinators = db
-      .prepare(
+      ),
+      db.execute(
         `SELECT 'Coordinador' AS tipo, c.id, c.first_name, c.last_name, c.ci, c.seccional_number, c.registered_at,
                 d.name AS department_name, dis.name AS district_name, c.created_at
          FROM coordinators c
          JOIN departments d ON d.id = c.department_id
          JOIN districts dis ON dis.id = c.district_id
          ORDER BY c.id DESC LIMIT 4`
-      )
-      .all() as Record<string, unknown>[];
-
-    const recentYouth = db
-      .prepare(
+      ),
+      db.execute(
         `SELECT 'Joven' AS tipo, y.id, y.first_name, y.last_name, y.ci, y.seccional_number, y.registered_at,
                 d.name AS department_name, dis.name AS district_name, y.created_at
          FROM youth_members y
          JOIN departments d ON d.id = y.department_id
          JOIN districts dis ON dis.id = y.district_id
          ORDER BY y.id DESC LIMIT 3`
-      )
-      .all() as Record<string, unknown>[];
-
-    const recentWomen = db
-      .prepare(
+      ),
+      db.execute(
         `SELECT 'Mujer' AS tipo, w.id, w.first_name, w.last_name, w.ci, w.seccional_number, w.registered_at,
                 d.name AS department_name, dis.name AS district_name, w.created_at
          FROM women_members w
          JOIN departments d ON d.id = w.department_id
          JOIN districts dis ON dis.id = w.district_id
          ORDER BY w.id DESC LIMIT 3`
-      )
-      .all() as Record<string, unknown>[];
-
-    const recentRecords = [...recentCoordinators, ...recentYouth, ...recentWomen]
-      .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
-      .slice(0, 8)
-      .map((r) => ({ ...r, ci: maskSensitive(String(r.ci || ''), canSensitive) }));
-
-    const byDepartment = db
-      .prepare(
+      ),
+      db.execute(
         `SELECT d.id, d.name,
           (SELECT COUNT(*) FROM coordinators c WHERE c.department_id = d.id) AS coordinadores,
           (SELECT COUNT(*) FROM youth_members y WHERE y.department_id = d.id) AS jovenes,
@@ -297,11 +295,8 @@ export function registerApiRoutes(app: Express) {
          FROM departments d
          WHERE d.active = 1
          ORDER BY (coordinadores + jovenes + mujeres + votos_estimados) DESC, d.id ASC`
-      )
-      .all();
-
-    const byDistrict = db
-      .prepare(
+      ),
+      db.execute(
         `SELECT dis.id, dis.name, d.name AS department_name,
           (SELECT COUNT(*) FROM coordinators c WHERE c.district_id = dis.id) +
           (SELECT COUNT(*) FROM youth_members y WHERE y.district_id = dis.id) +
@@ -312,11 +307,8 @@ export function registerApiRoutes(app: Express) {
          WHERE dis.active = 1
          ORDER BY votos_estimados DESC, total_estructura DESC
          LIMIT 12`
-      )
-      .all();
-
-    const bySeccional = db
-      .prepare(
+      ),
+      db.execute(
         `SELECT vp.seccional_number, d.name AS department_name, dis.name AS district_name,
           SUM(vp.estimated_votes) AS votos_estimados,
           COUNT(DISTINCT vp.coordinator_id) AS coordinadores
@@ -326,8 +318,27 @@ export function registerApiRoutes(app: Express) {
          GROUP BY vp.seccional_number, d.name, dis.name
          ORDER BY votos_estimados DESC
          LIMIT 12`
-      )
-      .all();
+      ),
+    ]);
+
+    const totalCoordinators = Number(coordRes.rows[0]?.c || 0);
+    const totalYouth = Number(youthRes.rows[0]?.c || 0);
+    const totalWomen = Number(womenRes.rows[0]?.c || 0);
+    const totalOnp = Number(onpRes.rows[0]?.c || 0);
+    const totalDepartments = Number(deptRes.rows[0]?.c || 0);
+    const totalDistricts = Number(distRes.rows[0]?.c || 0);
+    const totalSeccionales = Number(seccRes.rows[0]?.c || 0);
+    const totalEstimatedVotes = Number(votesRes.rows[0]?.s || 0);
+    const scheduledMeetings = Number(meetingsRes.rows[0]?.c || 0);
+
+    const recentCoordinators = recCoordRes.rows as unknown as Record<string, unknown>[];
+    const recentYouth = recYouthRes.rows as unknown as Record<string, unknown>[];
+    const recentWomen = recWomenRes.rows as unknown as Record<string, unknown>[];
+
+    const recentRecords = [...recentCoordinators, ...recentYouth, ...recentWomen]
+      .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
+      .slice(0, 8)
+      .map((r) => ({ ...r, ci: maskSensitive(String(r.ci || ''), canSensitive) }));
 
     res.json({
       kpis: {
@@ -341,14 +352,38 @@ export function registerApiRoutes(app: Express) {
         totalEstimatedVotes,
         scheduledMeetings,
       },
-      upcomingEvents,
+      upcomingEvents: upcomingRes.rows,
       recentRecords,
       charts: {
-        byDepartment,
-        byDistrict,
-        bySeccional,
+        byDepartment: byDeptRes.rows,
+        byDistrict: byDistRes.rows,
+        bySeccional: bySeccRes.rows,
       },
     });
+  });
+
+  // Quick coordinator search for Vote Projections
+  app.get('/api/people/coordinators/search', requireAuth, requirePermission('projections:view'), async (req: AuthRequest, res: Response) => {
+    const q = String(req.query.q || '').trim();
+    const canSensitive = req.user!.role_slug === 'super_admin' || !!req.user!.permissions['sensitive_data:view'];
+    const like = `%${q}%`;
+    const rowsRes = await db.execute({
+      sql: `SELECT c.id, c.first_name, c.last_name, c.ci, c.department_id, c.district_id, c.seccional_number,
+                   d.name AS department_name, dis.name AS district_name
+            FROM coordinators c
+            JOIN departments d ON d.id = c.department_id
+            JOIN districts dis ON dis.id = c.district_id
+            WHERE c.first_name LIKE ? OR c.last_name LIKE ? OR c.ci LIKE ? OR CAST(c.seccional_number AS TEXT) LIKE ?
+            ORDER BY c.last_name ASC, c.first_name ASC
+            LIMIT 25`,
+      args: [like, like, like, like],
+    });
+    res.json(
+      rowsRes.rows.map((r) => ({
+        ...r,
+        ci: maskSensitive(String(r.ci || ''), canSensitive),
+      }))
+    );
   });
 
   // Quick coordinator search for Vote Projections
