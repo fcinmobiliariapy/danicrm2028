@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import { NextFunction, Request, Response } from 'express';
-import { db } from './db.ts';
+import { db } from './db.js';
 
 const SESSION_SECRET = process.env.SESSION_SECRET || 'crm-politico-dani-centurion-2018-secret-key';
 const COOKIE_NAME = 'crm_session';
@@ -58,16 +58,17 @@ export function verifyToken(token: string): { uid: number; exp: number } | null 
   }
 }
 
-export function loadUserWithPermissions(userId: number): AuthUser | null {
-  const row = db
-    .prepare(
-      `SELECT u.id, u.username, u.full_name, u.email, u.role_id, u.custom_permissions_json, u.active,
-              r.slug AS role_slug, r.name AS role_name
-       FROM users u
-       JOIN roles r ON r.id = u.role_id
-       WHERE u.id = ? AND u.active = 1`
-    )
-    .get(userId) as
+export async function loadUserWithPermissions(userId: number): Promise<AuthUser | null> {
+  const userRes = await db.execute({
+    sql: `SELECT u.id, u.username, u.full_name, u.email, u.role_id, u.custom_permissions_json, u.active,
+                 r.slug AS role_slug, r.name AS role_name
+          FROM users u
+          JOIN roles r ON r.id = u.role_id
+          WHERE u.id = ? AND u.active = 1`,
+    args: [userId],
+  });
+
+  const row = userRes.rows[0] as unknown as
     | {
         id: number;
         username: string;
@@ -83,13 +84,14 @@ export function loadUserWithPermissions(userId: number): AuthUser | null {
 
   if (!row) return null;
 
-  const rolePerms = db
-    .prepare(
-      `SELECT p.key FROM role_permissions rp
-       JOIN permissions p ON p.id = rp.permission_id
-       WHERE rp.role_id = ?`
-    )
-    .all(row.role_id) as { key: string }[];
+  const permsRes = await db.execute({
+    sql: `SELECT p.key FROM role_permissions rp
+          JOIN permissions p ON p.id = rp.permission_id
+          WHERE rp.role_id = ?`,
+    args: [row.role_id],
+  });
+
+  const rolePerms = permsRes.rows as unknown as { key: string }[];
 
   const perms: Record<string, boolean> = {};
   for (const p of rolePerms) {
@@ -108,42 +110,47 @@ export function loadUserWithPermissions(userId: number): AuthUser | null {
   }
 
   return {
-    id: row.id,
-    username: row.username,
-    full_name: row.full_name,
-    email: row.email,
-    role_id: row.role_id,
-    role_slug: row.role_slug,
-    role_name: row.role_name,
+    id: Number(row.id),
+    username: String(row.username),
+    full_name: String(row.full_name),
+    email: String(row.email || ''),
+    role_id: Number(row.role_id),
+    role_slug: String(row.role_slug),
+    role_name: String(row.role_name),
     permissions: perms,
   };
 }
 
-export function requireAuth(req: AuthRequest, res: Response, next: NextFunction) {
-  const authHeader = req.headers.authorization;
-  let token = '';
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    token = authHeader.slice(7);
-  } else if (req.cookies && req.cookies[COOKIE_NAME]) {
-    token = req.cookies[COOKIE_NAME];
-  }
+export async function requireAuth(req: AuthRequest, res: Response, next: NextFunction) {
+  try {
+    const authHeader = req.headers.authorization;
+    let token = '';
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      token = authHeader.slice(7);
+    } else if (req.cookies && req.cookies[COOKIE_NAME]) {
+      token = req.cookies[COOKIE_NAME];
+    }
 
-  if (!token) {
-    return res.status(401).json({ error: 'Sesión no iniciada o expirada.' });
-  }
+    if (!token) {
+      return res.status(401).json({ error: 'Sesión no iniciada o expirada.' });
+    }
 
-  const decoded = verifyToken(token);
-  if (!decoded) {
-    return res.status(401).json({ error: 'Token de sesión inválido o expirado.' });
-  }
+    const decoded = verifyToken(token);
+    if (!decoded) {
+      return res.status(401).json({ error: 'Token de sesión inválido o expirado.' });
+    }
 
-  const user = loadUserWithPermissions(decoded.uid);
-  if (!user) {
-    return res.status(401).json({ error: 'Usuario inactivo o no encontrado.' });
-  }
+    const user = await loadUserWithPermissions(decoded.uid);
+    if (!user) {
+      return res.status(401).json({ error: 'Usuario inactivo o no encontrado.' });
+    }
 
-  req.user = user;
-  next();
+    req.user = user;
+    next();
+  } catch (error) {
+    console.error('Error en autenticación:', error);
+    return res.status(500).json({ error: 'Error interno al verificar la sesión.' });
+  }
 }
 
 export function requirePermission(permKey: string) {
